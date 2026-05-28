@@ -6,6 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -15,6 +16,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
           df -h
 
       - name: Setup Build Environment
@@ -30,22 +32,57 @@ jobs:
         run: |
           git config --global user.name "srikrithik"
           git config --global user.email "your_email@gmail.com"
+          git config --global color.ui false
 
       - name: Sync Infinity X Source
         run: |
           mkdir workspace && cd workspace
-          repo init -u https://github.com/projectinfinity-X/manifest.git -b 16 --depth=1
-          repo sync -c -j$(nproc) --force-sync --no-clone-bundle --no-tags
+          repo init -u https://github.com/ProjectInfinity-X/manifest.git -b 16 --depth=1
+          
+          # Try syncing with retries
+          for i in 1 2 3; do
+            echo "=== Sync attempt $i ==="
+            if repo sync -c -j4 --force-sync --no-clone-bundle --no-tags; then
+              echo "Sync successful!"
+              break
+            else
+              echo "Sync failed, retrying with fewer jobs..."
+              sleep 10
+            fi
+          done
+          
+          # Final attempt with single thread
+          repo sync -c -j1 --force-sync --no-clone-bundle --no-tags
+
+      - name: Check Source
+        run: |
+          cd workspace
+          echo "=== Source Files ==="
+          ls -la
+          echo "=== Device folder ==="
+          ls -la device/ 2>/dev/null || echo "No device folder yet"
+          echo "=== Disk Space ==="
+          df -h
 
       - name: Start Build
         run: |
           cd workspace
           source build/envsetup.sh
-          lunch infinity_r5x-userdebug || lunch infinity_arm64-userdebug
-          mka infinity -j$(nproc)
+          lunch infinity_r5x-ap4a-userdebug || lunch infinity_r5x-userdebug || echo "No r5x lunch target found - need device tree!"
+          mka infinity -j$(nproc) || echo "Build failed - check logs"
 
-      - name: Upload ROM
+      - name: Upload Build Logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: InfinityX-Build
+          name: build-logs
+          path: workspace/out/error.log
+          if-no-files-found: ignore
+
+      - name: Upload ROM
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: InfinityX-Realme5-Build
           path: workspace/out/target/product/*/*.zip
+          if-no-files-found: warn
